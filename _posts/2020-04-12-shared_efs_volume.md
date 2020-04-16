@@ -29,8 +29,108 @@ To avoid timeout errors in Passenger Assist, Transreport have made our PDF repor
 
 To solve this issue, a developer suggested writing PDFs to S3 in Sidekiq, and reading them from Rails. However, this would increase latency by sending requests all the way to the S3 API. Given the fact that Rails and Sidekiq are both running on the same Kubernetes cluster, this seems like a wasted opportunity. Therefore, I suggested mounting a volume into the worker nodes, to share the PDF between the processes locally. To solve this, I initially suggested that we could simply mount a directory from each EC2 instance straight into all Sidekiq and Rails pods running on it, but because the pods are spread across multiple workers, this would fail in cases where the cooperating Rails and Sidekiq pods weren't running on the same machine. Therefore, I decided to use AWS EFS, a shared filesystem that can be mounted into all of our worker nodes, and then into all of our Sidekiq and Rails pods.
 
-#### Implementation
+[This AWS blog post](https://aws.amazon.com/premiumsupport/knowledge-center/eks-pods-efs/) offers a solution for managing EFS volumes in EKS clusters.
 
-I decided to create everything manually at first, and then import it into Terraform afterwards. An [AWS blog post](https://aws.amazon.com/premiumsupport/knowledge-center/eks-pods-efs/) that I found explains the recommended architecture used for adding an EFS volume to your Kubernetes cluster.
+#### Solution overview
 
-TO BE CONTINUED
+The solution creates a Kubernetes Persistent Volume Claim, which is available to other resources in the cluster (RBAC-permitting). An `efs-provisioner` pod (using a Docker image provided by `quay.io`) "supplies" this PVC with the EFS volume, so that any Kubernetes pod with access to the PVC can mount the EFS volume. This solution uses an existing EFS volume, so we'll start with that.
+
+#### Implementation - AWS side
+
+When working with unfamiliar tech, I usually get it to run manually first, and then import it into Terraform afterwards. 
+
+First, I created a general purpose, bursting filesystem in the EFS console. After specifying the EFS type, I was prompted to create mount targets, which are used to grant access to the filesystem. Therefore, I created a mount target in each EKS subnet. After translating this to Terraform, it looks like this:
+```
+resource "aws_efs_file_system" "efs" {
+  creation_token    = "<name>-${terraform.workspace}"
+  performance_mode  = "generalPurpose"
+  throughput_mode   = "bursting"
+  encrypted         = "true"
+}
+
+resource "aws_efs_mount_target" "efs-mt" {
+  count = length(local.private_subnets[terraform.workspace])  # Create one mount target for each subnet
+  file_system_id  = aws_efs_file_system.efs.id
+  subnet_id = element(local.private_subnets[terraform.workspace], count.index)
+}
+```
+
+However, when I tried creating the efs-provisioner pod, it stalled at ContainerCreating, and its logs revealed that the volume was failing to mount into the container.
+```
+Warning FailedMount 1m kubelet, <ec2-instance-name> MountVolume.SetUp failed for volume "pv-volume" : mount failed: exit status 32
+```
+
+Luckily, I'm not the first person to find this issue, and the internet told me that the mount targets need to allow inbound TCP connections on port 2049. After adding this to Terraform, my `efs.tf` file looked like this: 
+
+```
+resource "aws_efs_file_system" "efs" {
+  creation_token    = "<name>-${terraform.workspace}"
+  performance_mode  = "generalPurpose"
+  throughput_mode   = "bursting"
+  encrypted         = "true"
+}
+
+resource "aws_efs_mount_target" "efs-mt" {
+  count = length(local.private_subnets[terraform.workspace])  # Create one mount target for each subnet
+  file_system_id  = aws_efs_file_system.efs.id
+  subnet_id = element(local.private_subnets[terraform.workspace], count.index)
+  security_groups = [aws_security_group.ingress_efs.id]
+}
+
+resource "aws_security_group" "ingress_efs" {
+  name        = "<name>-${terraform.workspace}-sg"
+  description = "Allow EKS nodes to mount EFS storage volumes - Managed by Terraform"
+  vpc_id      = local.vpc_id[terraform.workspace]
+
+  ingress {
+    security_groups = [local.eks_security_group]
+    from_port = 2049
+    to_port = 2049
+    protocol = "tcp"
+  }
+
+  egress {
+    security_groups = [local.eks_security_group]
+    from_port = 2049
+    to_port = 2049
+    protocol = "tcp"
+  }
+}
+```
+
+#### Implementation - Kubernetes Side
+
+The AWS blog post summarises the Kubernetes implementation, which is pretty simple. To get separate EFS volumes for each environment, I defined the EFS ID in environment-specific values files, and passed these into the configmap:
+```
+// charts/pa-config/templates/efs_configmap.yaml
+...
+data:
+  file.system.id: {{ .Values.efs.efs_id }}
+  aws.region: {{ .Values.efs.aws_region }}
+  provisioner.name: {{ .Values.efs.provisioner_name }}
+  dns.name: "{{ .Values.efs.efs_id}}.efs.{{ .Values.efs.aws_region }}.amazonaws.com"
+```
+These values are called by the `efs_deployment.yaml` file, which links the Terraform-managed EFS volume and the `efs_claim.yaml` PVC.
+
+Finally, to mount this volume into my application pods, the pods mount the PVC:
+```
+volumes:
+{{- if .Values.efs.enabled }}
+- name: efs-pvc
+  persistentVolumeClaim:
+    claimName: "efs-pa-{{ .Values.global.environment }}"
+{{- end }}
+```
+and the pod containers mount the volume too:
+```
+volumeMounts:
+{{- if .Values.efs.enabled }}
+- name: efs-pvc
+  mountPath: "/<mount-path>"
+{{- end }}
+```
+
+
+#### Conclusion
+
+Now, using `kubectl exec -it -n <namespace> <pod-name> <command>`, we can test the solution. First, I created a file in the pod-defined mount path (`echo file_contents >> /<mount-path>/test_file`) of the PDF-creating service. Then, `exec`ing into the PDF-sending service, `ls /<mount-path>` shows `test_file`, and `cat /<mount-path>/test_file` shows `file_contents`. Pushing the new Helm charts to our Helm repository means that future releases will work for any environment, so long as `efs.enabled=true`.
