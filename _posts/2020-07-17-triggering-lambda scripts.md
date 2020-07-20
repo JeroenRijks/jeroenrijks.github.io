@@ -103,10 +103,10 @@ Going back to my Lambda function, I can now add a trigger, so that it is invoked
         "Service": "sns.amazonaws.com"
       },
       "Action": "lambda:InvokeFunction",
-      "Resource": "arn:aws:lambda:eu-west-2:659974564728:function:helloWorldAtMidday",
+      "Resource": "arn:aws:lambda:eu-west-2:<my AWS account ID>:function:helloWorldAtMidday",
       "Condition": {
         "ArnLike": {
-          "AWS:SourceArn": "arn:aws:sns:eu-west-2:659974564728:InvokeMiddayLambda"
+          "AWS:SourceArn": "arn:aws:sns:eu-west-2:<my AWS account ID>:InvokeMiddayLambda"
         }
       }
     }
@@ -151,7 +151,7 @@ It's best practice to create a separate AWS IAM (identity and access management)
     {
       "Effect": "Allow",
       "Action": "lambda:InvokeFunction",
-      "Resource": "arn:aws:lambda:eu-west-2:659974564728:function:helloWorldAtMidday",
+      "Resource": "arn:aws:lambda:eu-west-2:<my AWS account ID>:function:helloWorldAtMidday",
     }
   ]
 }
