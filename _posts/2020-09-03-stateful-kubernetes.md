@@ -10,7 +10,7 @@ background: '/img/posts/01.jpg'
 I haven't spent much time researching the benefits of running stateful application servers, or stateful Kubernetes specifically. This post is being written to start conversations about the topic, so I'd be very happy to receive feedback or talk about this more (email: jeroen-rijks@hotmail.com). I've also added asterisks to areas that I'm not confident about, so treat those with an extra bit of caution.
 
 ## Stateful application servers
-My colleagues and I were discussing [this article](https://mailchi.mp/railsspeed/one-heroku-feature-that-everyone-should-copy?e=1352295606), which talks about how Heroku restarts its instances every 24 hours, resetting their entire filesystem. By periodicically resetting a server's state, application design becomes incentivised to create stateless applications. By running statelessly, you can (among other things): 
+My colleagues and I were discussing [this article](https://mailchi.mp/railsspeed/one-heroku-feature-that-everyone-should-copy?e=1352295606), which talks about how Heroku restarts its instances every 24 hours, resetting their entire filesystem. By periodically resetting a server's state, application design becomes incentivised to create stateless applications. By running statelessly, you can (among other things): 
 - avoid having an irreproducible state that acts as a single point of failure
 - scale horizontally without the complexity of replicating state across servers
 - use spot instances to save money
