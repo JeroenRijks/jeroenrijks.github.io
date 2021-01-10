@@ -1,7 +1,7 @@
 ---
 layout: post
-title: "Removing Redis Namespace From a Live Service"
-subtitle: ""
+title: "Incompatibility between Redis Namespace and Sidekiq Alive"
+subtitle: "And how we dealt with it"
 date: 2021-01-10 00:30:00 -0400
 background: '/img/posts/09.jpg'
 ---
